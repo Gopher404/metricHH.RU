@@ -10,18 +10,18 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"time"
 )
 
 const (
-	DBSource = ""
 	DBDriver = "mysql"
 )
 
 var (
 	urls = []string{
 		"https://spb.hh.ru/search/vacancy?hhtmFrom=main&hhtmFromLabel=vacancy_search_line&search_field=name&search_field=company_name&search_field=description&text=golang&enable_snippets=false&L_save_area=true",
-		"https://spb.hh.ru/search/vacancy?hhtmFrom=main&hhtmFromLabel=vacancy_search_line&search_field=name&search_field=company_name&search_field=description&enable_snippets=false&L_save_area=true&area=41&text=golang",
+		"https://kaliningrad.hh.ru/search/vacancy?text=golang&area=41&hhtmFrom=main&hhtmFromLabel=vacancy_search_line",
 		"https://spb.hh.ru/search/vacancy?hhtmFrom=main&hhtmFromLabel=vacancy_search_line&search_field=name&search_field=company_name&search_field=description&enable_snippets=false&L_save_area=true&experience=noExperience&text=golang",
 		"https://spb.hh.ru/search/vacancy?hhtmFrom=main&hhtmFromLabel=vacancy_search_line&search_field=name&search_field=company_name&search_field=description&enable_snippets=false&L_save_area=true&schedule=remote&text=golang",
 	}
@@ -35,7 +35,7 @@ var (
 
 	date string
 
-	search = []byte("<h1 data-qa=\"bloko-header-3\" class=\"bloko-header-section-3\">")
+	data map[string]int
 )
 
 var db *sql.DB
@@ -63,8 +63,15 @@ func main() {
 
 	//simpleGet()
 
+	tiker := time.NewTicker(time.Hour * 24)
+
+	stop := make(chan os.Signal)
+	signal.Notify(stop, os.Interrupt)
+
 	for {
 		date = time.Now().Format(time.DateOnly)
+
+		data = make(map[string]int)
 
 		log.Println(date)
 
@@ -73,18 +80,36 @@ func main() {
 				StartURLs: urls,
 				ParseFunc: ParseFunc,
 			}).Start()
+
+			if err := WriteData(db, date, data); err != nil {
+				log.Println(err)
+			}
 		}()
 
-		time.Sleep(time.Hour * 24)
+		select {
+		case <-tiker.C:
+			break
+		case <-stop:
+			log.Println("stop")
+			return
+		}
 	}
 
 }
 
 func ParseFunc(g *geziyor.Geziyor, r *client.Response) {
-	if err := os.WriteFile(urlNames[r.Request.URL.String()]+".html", r.Body, 600); err != nil {
+	urlName := urlNames[r.Request.URL.String()]
+
+	if err := os.WriteFile(urlName+".html", r.Body, 666); err != nil {
 		log.Println("writing response to file", err)
 	}
 
+	numStr := r.HTMLDoc.Find("h1.bloko-header-section-3").Text()
+	log.Println("num str:", numStr)
+
+	num := findNum(numStr)
+
+	data[urlName] = num
 }
 
 func WriteData(db *sql.DB, date string, data map[string]int) error {
@@ -118,29 +143,20 @@ func simpleGet() {
 		panic(err)
 	}
 
-	ioutil.WriteFile("test.html", b, 0644)
+	ioutil.WriteFile("test.html", b, 666)
 }
 
 func findNum(s string) int {
-	var days int
-	isFindNum := false
+	var num int
 
 	for _, a := range s {
 		d, ok := digits[a]
-		if ok && !isFindNum {
-			isFindNum = true
-			days = d
-
-		} else if isFindNum {
-			if ok {
-				days = days*10 + d
-			} else {
-				break
-			}
+		if ok {
+			num = num*10 + d
 		}
 	}
 
-	return days
+	return num
 }
 
 var digits = map[rune]int{
